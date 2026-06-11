@@ -6,7 +6,7 @@
 </head>
 <body>
   <header>
-    <h1>AI Blocker</h1>
+    <h1>AI Art Blocker</h1>
     <label class="switch">
       <input type="checkbox" id="enabled" />
       <span class="slider"></span>
@@ -16,6 +16,19 @@
   <div class="stat">
     <span class="stat-num" id="count">0</span>
     <span class="stat-label">blocked this session</span>
+  </div>
+
+  <div class="page-status" id="pageStatus">Checking this page…</div>
+
+  <div class="mode-group">
+    <label class="row">
+      <input type="checkbox" id="site-deviantart" />
+      DeviantArt
+    </label>
+    <label class="row">
+      <input type="checkbox" id="site-pinterest" />
+      Pinterest
+    </label>
   </div>
 
   <div class="mode-group">

@@ -80,6 +80,13 @@ h1 {
   cursor: pointer;
 }
 
+.page-status {
+  color: #9a9aa8;
+  font-size: 12px;
+  margin: -6px 0 12px;
+  padding: 0 2px;
+}
+
 .mode-group {
   background: #20202a;
   border-radius: 8px;

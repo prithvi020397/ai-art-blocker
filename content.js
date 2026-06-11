@@ -18,6 +18,7 @@ const DEFAULTS = {
   enabled: true,
   mode: "mark", // "mark" = red X over AI art, "hide" = placeholder + reveal
   deepCheck: true,
+  sites: { deviantart: true, pinterest: true },
   keywords: [
     "ai",
     "aiart",
@@ -45,6 +46,37 @@ const deviantartAdapter = (() => {
   let inFlight = 0;
   let csrfToken = null;
   let apiBroken = false;
+
+  // Resolved flags persist in chrome.storage.local so revisited pages don't
+  // re-hit the API. The whole map is rewritten on a debounce and capped.
+  const STORE_KEY = "aiFlags_deviantart";
+  const STORE_CAP = 20000;
+  let persistMap = {};
+  let saveTimer = null;
+
+  async function loadPersistentCache() {
+    try {
+      const stored = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY] || {};
+      if (Object.keys(stored).length > STORE_CAP) {
+        await chrome.storage.local.remove(STORE_KEY); // oversized: start fresh
+        return;
+      }
+      persistMap = stored;
+      for (const [id, v] of Object.entries(persistMap)) aiCache.set(id, !!v);
+    } catch (_) {
+      // storage unavailable — in-memory cache still works
+    }
+  }
+
+  function persist(id, value) {
+    persistMap[id] = value ? 1 : 0;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        chrome.storage.local.set({ [STORE_KEY]: persistMap });
+      } catch (_) {}
+    }, 2000);
+  }
 
   const LINK_RE = /deviantart\.com\/([^/]+)\/([^/]+)\/[^/]*?-(\d+)(?:[#?].*)?$/i;
 
@@ -90,13 +122,16 @@ const deviantartAdapter = (() => {
       }
       if (!res.ok) throw new Error(`api error ${res.status}`);
       const data = await res.json();
-      job.resolve(!!(data && data.deviation && data.deviation.isAiGenerated));
+      const flag = !!(data && data.deviation && data.deviation.isAiGenerated);
+      persist(job.id, flag);
+      job.resolve(flag);
     } catch (err) {
       job.reject(err);
     }
   }
 
   return {
+    init: loadPersistentCache,
     thumbSelector: '[data-testid="thumb"]',
     resolve(thumb) {
       const link = thumb.closest("a[href]");
@@ -173,14 +208,21 @@ const pinterestAdapter = {
   official: null
 };
 
-function pickAdapter() {
+function pickSite() {
   const host = location.hostname;
-  if (host.endsWith("deviantart.com")) return deviantartAdapter;
-  if (host.endsWith("pinterest.com")) return pinterestAdapter;
+  if (host.endsWith("deviantart.com")) return { key: "deviantart", adapter: deviantartAdapter };
+  if (host.endsWith("pinterest.com")) return { key: "pinterest", adapter: pinterestAdapter };
   return null;
 }
 
-const adapter = pickAdapter();
+const SITE = pickSite();
+const adapter = SITE && SITE.adapter;
+
+function isActive() {
+  if (!SITE || !settings.enabled) return false;
+  const sites = settings.sites || {};
+  return sites[SITE.key] !== false;
+}
 
 // ---- keyword matching ------------------------------------------------------
 
@@ -285,7 +327,7 @@ function updateFloatingBadge() {
     document.documentElement.appendChild(badge);
   }
   badge.textContent = `${settings.mode === "mark" ? "AI marked" : "AI blocked"}: ${blockedCount}`;
-  badge.style.display = settings.enabled && blockedCount > 0 ? "block" : "none";
+  badge.style.display = isActive() && blockedCount > 0 ? "block" : "none";
 }
 
 function bump(delta) {
@@ -369,7 +411,7 @@ function evaluate(item) {
     (isAi) => {
       // Infinite-scroll grids recycle nodes; only block if this cell still
       // shows the same item we checked.
-      if (isAi && settings.enabled && cell.isConnected && cell.dataset.aibChecked === key) {
+      if (isAi && isActive() && cell.isConnected && cell.dataset.aibChecked === key) {
         block(cell);
       }
     },
@@ -378,7 +420,7 @@ function evaluate(item) {
 }
 
 function scan() {
-  if (!settings.enabled || !adapter) return;
+  if (!isActive()) return;
   for (const thumb of document.querySelectorAll(adapter.thumbSelector)) {
     const item = adapter.resolve(thumb);
     if (!item) continue;
@@ -411,10 +453,22 @@ chrome.storage.onChanged.addListener((changes, area) => {
     settings[key] = newValue;
   }
   buildKeywordRegexes();
-  if (!settings.enabled) {
+  if (!isActive()) {
     unhideAll();
   } else {
     resetAndRescan();
+  }
+});
+
+// Popup asks for page status so it can show "N found here" vs "not active".
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === "aib:status") {
+    sendResponse({
+      site: SITE ? SITE.key : null,
+      active: isActive(),
+      count: blockedCount,
+      mode: settings.mode
+    });
   }
 });
 
@@ -423,6 +477,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   settings = await chrome.storage.sync.get(DEFAULTS);
   buildKeywordRegexes();
   injectStyles();
+  if (adapter.init) await adapter.init();
   scan();
   // One observer on body survives client-side route changes, which replace
   // the grid container entirely on both sites.
