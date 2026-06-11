@@ -24,7 +24,7 @@ searchable text lives, and how to get the site's official AI label.
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (top-right toggle)
 3. Click **Load unpacked**
-4. Select this folder (`ai-blocker-deviantart/`)
+4. Select this folder (`ai-art-blocker/`)
 5. Browse DeviantArt — hidden items show an "AI hidden — Reveal" placeholder,
    and a floating counter appears bottom-right
 
@@ -63,7 +63,7 @@ token embedded in the page).
 ## Files
 
 ```
-ai-blocker-deviantart/
+ai-art-blocker/
 ├── manifest.json     MV3 manifest — storage permission only
 ├── content.js        detection, hiding, observer, floating counter
 ├── background.js     session total + toolbar badge count
