@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>AI Blocker</h1>
+    <label class="switch">
+      <input type="checkbox" id="enabled" />
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <div class="stat">
+    <span class="stat-num" id="count">0</span>
+    <span class="stat-label">blocked this session</span>
+  </div>
+
+  <div class="mode-group">
+    <label class="row">
+      <input type="radio" name="mode" value="mark" />
+      Mark with red <span class="x">✕</span>
+    </label>
+    <label class="row">
+      <input type="radio" name="mode" value="hide" />
+      Hide (placeholder + Reveal)
+    </label>
+  </div>
+
+  <label class="row">
+    <input type="checkbox" id="deepCheck" />
+    Deep check (official AI label via DeviantArt)
+  </label>
+
+  <label class="kw-label" for="keywords">Keywords (one per line)</label>
+  <textarea id="keywords" rows="8" spellcheck="false"></textarea>
+
+  <div class="footer">
+    <span id="status"></span>
+    <button id="save">Save keywords</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

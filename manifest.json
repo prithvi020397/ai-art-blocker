@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "AI Art Blocker",
+  "version": "0.2.0",
+  "description": "Marks or hides AI-generated art on DeviantArt and Pinterest. Official AI labels where available, keyword fallback everywhere.",
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.deviantart.com/*", "*://*.pinterest.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "AI Art Blocker"
+  }
+}
