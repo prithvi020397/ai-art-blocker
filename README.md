@@ -17,7 +17,7 @@ searchable text lives, and how to get the site's official AI label.
 | Site | Thumbnail hook | Official AI flag |
 |---|---|---|
 | DeviantArt | `[data-testid="thumb"]` | internal API `isAiGenerated` (verified) |
-| Pinterest | `[data-grid-item="true"]` / `[data-test-id="pin"]` | not wired yet — needs authenticated recon of the pin API; layers 1–2 active |
+| Pinterest | `[data-grid-item="true"]` / `[data-test-id="pin"]` | closeup-page AI label marker + `gen_ai_topics` (fetched in the user's own session, cached) |
 
 ## Install (load unpacked)
 

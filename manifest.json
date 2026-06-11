@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Art Blocker",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Marks or hides AI-generated art on DeviantArt and Pinterest. Official AI labels where available, keyword fallback everywhere.",
   "permissions": ["storage"],
   "icons": {

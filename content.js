@@ -37,32 +37,26 @@ let blockedCount = 0; // currently marked/hidden on this page
 
 // ---- site adapters ---------------------------------------------------------
 
-const deviantartAdapter = (() => {
-  // Deep check: DA's internal API, the same one the site uses. Cached,
-  // throttled, and self-disabling on auth errors.
-  const aiCache = new Map(); // deviationId -> boolean | Promise<boolean>
+// Shared deep-check helper: per-item flag fetcher with an in-memory +
+// persistent (chrome.storage.local) cache and a concurrency-limited queue.
+// Resolved flags survive restarts so revisited pages cost zero requests.
+function createFlagChecker({ storeKey, maxConcurrent, fetchFlag }) {
+  const cache = new Map(); // id -> boolean | Promise<boolean>
   const queue = [];
-  const MAX_CONCURRENT = 3;
-  let inFlight = 0;
-  let csrfToken = null;
-  let apiBroken = false;
-
-  // Resolved flags persist in chrome.storage.local so revisited pages don't
-  // re-hit the API. The whole map is rewritten on a debounce and capped.
-  const STORE_KEY = "aiFlags_deviantart";
   const STORE_CAP = 20000;
+  let inFlight = 0;
   let persistMap = {};
   let saveTimer = null;
 
-  async function loadPersistentCache() {
+  async function init() {
     try {
-      const stored = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY] || {};
+      const stored = (await chrome.storage.local.get(storeKey))[storeKey] || {};
       if (Object.keys(stored).length > STORE_CAP) {
-        await chrome.storage.local.remove(STORE_KEY); // oversized: start fresh
+        await chrome.storage.local.remove(storeKey); // oversized: start fresh
         return;
       }
       persistMap = stored;
-      for (const [id, v] of Object.entries(persistMap)) aiCache.set(id, !!v);
+      for (const [id, v] of Object.entries(persistMap)) cache.set(id, !!v);
     } catch (_) {
       // storage unavailable — in-memory cache still works
     }
@@ -73,10 +67,52 @@ const deviantartAdapter = (() => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       try {
-        chrome.storage.local.set({ [STORE_KEY]: persistMap });
+        chrome.storage.local.set({ [storeKey]: persistMap });
       } catch (_) {}
     }, 2000);
   }
+
+  function pump() {
+    while (inFlight < maxConcurrent && queue.length) {
+      const job = queue.shift();
+      inFlight++;
+      fetchFlag(job)
+        .then(
+          (flag) => {
+            persist(job.id, flag);
+            job.resolve(flag);
+          },
+          (err) => job.reject(err)
+        )
+        .finally(() => {
+          inFlight--;
+          pump();
+        });
+    }
+  }
+
+  function check(id, payload) {
+    const cached = cache.get(id);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const p = new Promise((resolve, reject) => {
+      queue.push(Object.assign({ id, resolve, reject }, payload));
+      pump();
+    });
+    cache.set(id, p);
+    p.then(
+      (v) => cache.set(id, v),
+      () => cache.delete(id)
+    );
+    return p;
+  }
+
+  return { init, check };
+}
+
+const deviantartAdapter = (() => {
+  // Deep check: DA's internal API, the same one the site uses.
+  let csrfToken = null;
+  let apiBroken = false; // set on auth failure so we stop hammering the API
 
   const LINK_RE = /deviantart\.com\/([^/]+)\/([^/]+)\/[^/]*?-(\d+)(?:[#?].*)?$/i;
 
@@ -90,19 +126,10 @@ const deviantartAdapter = (() => {
     return null;
   }
 
-  function pump() {
-    while (inFlight < MAX_CONCURRENT && queue.length) {
-      const job = queue.shift();
-      inFlight++;
-      fetchAiFlag(job).finally(() => {
-        inFlight--;
-        pump();
-      });
-    }
-  }
-
-  async function fetchAiFlag(job) {
-    try {
+  const checker = createFlagChecker({
+    storeKey: "aiFlags_deviantart",
+    maxConcurrent: 3,
+    async fetchFlag(job) {
       if (apiBroken) throw new Error("api disabled");
       if (!csrfToken) csrfToken = findCsrfToken();
       if (!csrfToken) {
@@ -122,16 +149,12 @@ const deviantartAdapter = (() => {
       }
       if (!res.ok) throw new Error(`api error ${res.status}`);
       const data = await res.json();
-      const flag = !!(data && data.deviation && data.deviation.isAiGenerated);
-      persist(job.id, flag);
-      job.resolve(flag);
-    } catch (err) {
-      job.reject(err);
+      return !!(data && data.deviation && data.deviation.isAiGenerated);
     }
-  }
+  });
 
   return {
-    init: loadPersistentCache,
+    init: checker.init,
     thumbSelector: '[data-testid="thumb"]',
     resolve(thumb) {
       const link = thumb.closest("a[href]");
@@ -159,54 +182,79 @@ const deviantartAdapter = (() => {
       if (apiBroken) return null;
       const m = link.href.match(LINK_RE);
       if (!m) return null;
-      const [, username, type, id] = m;
-      const cached = aiCache.get(id);
-      if (cached !== undefined) return Promise.resolve(cached);
-      const p = new Promise((resolve, reject) => {
-        queue.push({ id, username, type, resolve, reject });
-        pump();
-      });
-      aiCache.set(id, p);
-      p.then(
-        (v) => aiCache.set(id, v),
-        () => aiCache.delete(id)
-      );
-      return p;
+      return checker.check(m[3], { username: m[1], type: m[2] });
     }
   };
 })();
 
-const pinterestAdapter = {
-  thumbSelector: '[data-grid-item], [data-test-id="pin"], [data-test-id="pinWrapper"]',
-  resolve(thumb) {
-    const link =
-      thumb.querySelector('a[href*="/pin/"]') || thumb.closest('a[href*="/pin/"]');
-    if (!link) return null;
-    // the grid item itself is the cell (Pinterest positions it absolutely)
-    const cell = thumb.closest("[data-grid-item]") || thumb;
-    return { cell, link, thumb, key: link.href };
-  },
-  text({ cell, link }) {
-    const img = cell.querySelector("img");
-    return [
-      img ? img.alt : "",
-      link.getAttribute("aria-label") || "",
-      cell.getAttribute("aria-label") || ""
-    ]
-      .join(" ")
-      .toLowerCase();
-  },
-  badge({ cell }) {
-    // Pinterest stamps "AI generated" / "AI modified" labels on some
-    // surfaces (mainly closeups); harmless to check grid cells too.
-    return !!cell.querySelector(
-      '[aria-label*="AI generated" i], [aria-label*="AI modified" i], [title*="AI generated" i], [title*="AI modified" i]'
-    );
-  },
-  // No deep check yet: Pinterest's official flag lives in its internal pin
-  // API, which needs an authenticated session to verify. Layers 1-2 only.
-  official: null
-};
+const pinterestAdapter = (() => {
+  // Deep check: Pinterest renders its official "AI generated" / "AI modified"
+  // label only on pin closeup pages, as an element with this test-id. The
+  // label is not exposed in grid markup or any anonymous API, so we fetch the
+  // closeup HTML (same-origin, the user's own session) and look for the
+  // marker — plus the gen_ai_topics field if pin JSON is embedded. Heavier
+  // than a JSON API, hence concurrency 2 and the persistent cache.
+  const AI_LABEL_MARKER = "closeup-image-overlay-layer-ai-generated-label";
+  const PIN_ID_RE = /\/pin\/(?:[^/]*--)?(\d+)/;
+  let apiBroken = false;
+
+  const checker = createFlagChecker({
+    storeKey: "aiFlags_pinterest",
+    maxConcurrent: 2,
+    async fetchFlag(job) {
+      if (apiBroken) throw new Error("checks disabled");
+      const res = await fetch(`${location.origin}/pin/${job.id}/`, {
+        credentials: "same-origin"
+      });
+      if (res.status === 401 || res.status === 403 || res.status === 429) {
+        apiBroken = true; // auth wall or rate limit: stop for this page
+        throw new Error(`closeup fetch blocked ${res.status}`);
+      }
+      if (!res.ok) throw new Error(`closeup fetch error ${res.status}`);
+      const html = await res.text();
+      if (html.includes(AI_LABEL_MARKER)) return true;
+      const m = html.match(/"gen_ai_topics"\s*:\s*(\[[^\]]*\]|null)/);
+      return !!(m && m[1] !== "null" && m[1] !== "[]");
+    }
+  });
+
+  return {
+    init: checker.init,
+    thumbSelector: '[data-grid-item], [data-test-id="pin"], [data-test-id="pinWrapper"]',
+    resolve(thumb) {
+      const link =
+        thumb.querySelector('a[href*="/pin/"]') || thumb.closest('a[href*="/pin/"]');
+      if (!link) return null;
+      // the grid item itself is the cell (Pinterest positions it absolutely)
+      const cell = thumb.closest("[data-grid-item]") || thumb;
+      return { cell, link, thumb, key: link.href };
+    },
+    text({ cell, link }) {
+      const img = cell.querySelector("img");
+      return [
+        img ? img.alt : "",
+        link.getAttribute("aria-label") || "",
+        cell.getAttribute("aria-label") || ""
+      ]
+        .join(" ")
+        .toLowerCase();
+    },
+    badge({ cell }) {
+      // Official label element (closeups) plus text variants on other surfaces
+      return !!cell.querySelector(
+        `[data-test-id="${AI_LABEL_MARKER}"], ` +
+          '[aria-label*="AI generated" i], [aria-label*="AI modified" i], ' +
+          '[title*="AI generated" i], [title*="AI modified" i]'
+      );
+    },
+    official({ link }) {
+      if (apiBroken) return null;
+      const m = link.href.match(PIN_ID_RE);
+      if (!m) return null;
+      return checker.check(m[1], {});
+    }
+  };
+})();
 
 function pickSite() {
   const host = location.hostname;
